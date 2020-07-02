@@ -13,6 +13,9 @@ from tqdm import tqdm
 from collections import Counter
 
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+o = tokenizer.convert_ids_to_tokens([ 101, 1999, 2054, 2095, 2001, 4325, 1010, 1037, 9569, 5961, 1999,
+        2698, 2808, 2517, 1029,  102,  103,  102])
+print(o)
 
 class BertLayer(tf.keras.layers.Layer):
    def __init__(
@@ -134,13 +137,26 @@ def tokenize_test(data, function):
 
     return result
 
+def remove_non_percent(answers, questions):
+    res_ans = []
+    res_qwe = []
+    for i in range(len(answers)):
+        for j in answers[i]:
+            if j == "%":
+                res_ans.append(answers[i])
+                if questions is not None:
+                    res_qwe.append(questions[i])
+                break
+    return res_ans, res_qwe
+
+
 def remove_non_digit(answers, questions):
     res_ans = []
     res_qwe = []
     for i in range(len(answers)):
-        if (len(answers[i]) != 3): continue
+        if (len(answers[i]) != 3 and questions is not None) or (len(answers[i]) != 1 and questions is None): continue
         for j in answers[i]:
-            if j.isnumeric():
+            if j.isnumeric() and len(j) == 4:
                 res_ans.append(answers[i])
                 if questions is not None:
                     res_qwe.append(questions[i])
@@ -156,7 +172,8 @@ def prep_test(data, max_seq_length):
     answers = tokenize(data, get_answers)
     questions = tokenize(data, get_questions)
     print(1, len(answers), len(questions))
-    answers, questions = remove_non_digit(answers, questions)
+    #answers, questions = remove_non_digit(answers, questions)
+    answers, questions = remove_non_percent(answers, questions)
     print(2, len(answers), len(questions))
     print(answers)
     masks = []
@@ -180,7 +197,9 @@ def prep_test(data, max_seq_length):
     questions = map(lambda q: tokenizer.convert_tokens_to_ids(q), questions)
     questions = list(questions)
     answers = tokenize_test(data, get_answers)
-    answers, _ = remove_non_digit(answers, None)
+    print("first", len(answers))
+    answers, _ = remove_non_percent(answers, None)
+    print("second", len(answers))
     answers = map(lambda q: tokenizer.convert_tokens_to_ids(q), answers)
 
     answers = list(answers)
@@ -212,22 +231,6 @@ def prepare_to_eval(x, y, z, ans):
 
 test_inputs, test_answers = prepare_to_eval(test_input_ids, test_masks, test_segments, test_answers)
 
-
-checkpoint_path = "training/cp.ckpt"
-checkpoint_dir = os.path.dirname(checkpoint_path)
-
-# Create a callback that saves the model's weights
-cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
-                                                 save_weights_only=True,
-                                                 verbose=1)
-tb_callback = tf.keras.callbacks.TensorBoard(log_dir="./logs")
-
-class F1_metrics(tf.keras.callbacks.Callback):
-   def on_epoch_end(self, epoch, logs=None):
-      myeval()
-      #print('The average loss for epoch {} is {:7.2f} and mean absolute error is {:7.2f}.'.format(epoch, logs['loss'], logs['mae']))
-
-evaluate = F1_metrics()
 
 def model_out(x):
    seg = x[2]
@@ -273,15 +276,39 @@ def f1_score(prediction, ground_truth):
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
 
+def number_score(prediction, ground_truth):
+    prediction = np.resize(prediction, prediction.size - 1)
+    prediction = tokenizer.convert_ids_to_tokens(prediction)
+    print(prediction)
+    if (prediction[0].isnumeric() and len(prediction[0]) == 4):
+        return 1
+    else: return 0
+
+def percent_score(prediction, ground_truth):
+    prediction = np.resize(prediction, prediction.size - 1)
+    prediction = tokenizer.convert_ids_to_tokens(prediction)
+    print(prediction)
+    if ("%" in prediction):
+        return 1
+    else: return 0
+
+
 def myeval():
    f1 = 0
+   #n = 0
+   p = 0
    with tqdm(total=len(test_inputs), desc="In progress", bar_format="{l_bar}{bar} [ time left: {remaining} ]") as pbar:
       for i in range(len(test_inputs)):
-         f1 += f1_score(model_out(test_inputs[i]), np.asarray(test_answers[i]))
-         #print(f1)
+         o = model_out(test_inputs[i])
+         a = np.asarray(test_answers[i])
+         f1 += f1_score(o, a)
+         #n += number_score(o, a)
+         p += percent_score(o, a)
          pbar.update(1)
    f1 = 100.0 * f1 / len(test_inputs)
-   print("F1 score: ", f1, )
+   p = 100.0 * p / len(test_inputs)
+   print("F1 score: ", f1)
+   print("p score", p)
 print(len(test_inputs))
 
 checkpoint_path = "training/cp.ckpt"
